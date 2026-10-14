@@ -37,7 +37,7 @@ interface Outcome {
 async function loadUnder(opts: { firstError: Error; retry: 'wasm-ok' | 'wasm-fails' }): Promise<Outcome> {
   const origLoad = Module._load;
   const resolverBefore = Module._resolveFilename;
-  const wasmStub = { marker: 'wasm-sharp' };
+  const wasmStub = () => ({ marker: 'wasm-sharp' });
   const probe: Probe = { sharpLoads: 0, nativeError: null, wasmError: null, unrelatedResolved: false };
 
   Module._load = function (request: string, parent: any, isMain: boolean) {

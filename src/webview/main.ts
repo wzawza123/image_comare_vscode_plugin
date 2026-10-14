@@ -4,6 +4,7 @@
  */
 
 import * as crop from './crop';
+import { comparisonCells, drawComparison, CAPTION_HEIGHT } from './comparison';
 import { nextVisibleModality, isVoteClickable, displayOrderAfterInsert } from './modalityVisibility';
 import { shiftIndexAfterRemoval } from '../watcherLogic';
 import { ThumbUrlCache, BLANK_THUMB } from './thumbUrlCache';
@@ -161,6 +162,68 @@ let loadedTuples: Map<TupleIndex, LoadedImage[]> = new Map();
 const thumbnailUrls = new ThumbUrlCache(url => URL.revokeObjectURL(url));
 
 let zoom = 1;
+let comparisonMode = (vscode.getState() as { comparisonMode?: boolean } | undefined)?.comparisonMode === true;
+const layoutBtn = document.getElementById('layout-btn') as HTMLButtonElement;
+const copyComparisonBtn = document.getElementById('copy-comparison-btn') as HTMLButtonElement;
+
+function comparisonGeometry() {
+  const offset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+  const width = Math.max(1, viewerEl.clientWidth - offset);
+  const height = Math.max(1, viewerEl.clientHeight);
+  const indices = modalityOrder.flatMap((original, index) => hiddenModalities.has(original) ? [] : [index]);
+  return { offset, width, height, cells: comparisonCells(indices, width, height) };
+}
+
+function setComparisonMode(enabled: boolean) {
+  if (crop.cropMode) crop.exitCropMode();
+  cropBtn.classList.remove('active');
+  comparisonMode = enabled;
+  zoom = 1;
+  panX = panY = 0;
+  vscode.setState({ ...(vscode.getState() as object || {}), comparisonMode });
+  render();
+}
+
+function renderComparison() {
+  const { offset, width, height, cells } = comparisonGeometry();
+  const ratio = window.devicePixelRatio || 1;
+  canvasEl.width = Math.round(width * ratio);
+  canvasEl.height = Math.round(height * ratio);
+  canvasEl.style.width = `${width}px`;
+  canvasEl.style.height = `${height}px`;
+  canvasEl.style.transform = `translate(calc(-50% + ${offset / 2}px), -50%)`;
+  canvasEl.classList.remove('preview');
+  imageLoaderEl.classList.remove('active');
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  drawComparison(ctx, cells, images, modalities, zoom, panX, panY, currentModalityIndex);
+  ctx.resetTransform();
+  for (const cell of cells) {
+    if (!images[cell.index] && loadDebounceTimer === null) {
+      requestSlot(currentTupleIndex, modalityOrder[cell.index], 'visible');
+    }
+  }
+  updateStatus(cells.length ? tuples[currentTupleIndex].name : 'Show a modality to compare', `${cells.length} images · Zoom: ${zoom.toFixed(1)}x`, currentTupleIndex);
+}
+
+function copyComparison() {
+  if (applyEmptyNotice()) return;
+  const { width, height, cells } = comparisonGeometry();
+  const cached = loadedTuples.get(currentTupleIndex);
+  const currentImages = cached ? reorderImagesForDisplay(cached) : [];
+  if (!cells.length || cells.some(cell => !currentImages[cell.index]?.img)) {
+    showCopyToast('Wait for all visible images to load; hide unavailable images before copying');
+    return;
+  }
+  // Export the displayed region at 2x resolution, including labels but excluding selection borders.
+  const output = document.createElement('canvas');
+  const ratio = Math.min(2, 8192 / width, 8192 / height, Math.sqrt(32000000 / (width * height)));
+  output.width = Math.max(1, Math.round(width * ratio));
+  output.height = Math.max(1, Math.round(height * ratio));
+  const context = output.getContext('2d')!;
+  context.scale(ratio, ratio);
+  drawComparison(context, cells, currentImages, modalities, comparisonMode ? zoom : 1, comparisonMode ? panX : 0, comparisonMode ? panY : 0);
+  output.toBlob(blob => blob ? writeImageToClipboard(blob) : showCopyToast('Copy failed'), 'image/png');
+}
 let panX = 0;
 let panY = 0;
 let isDragging = false;
@@ -261,6 +324,8 @@ function init() {
 }
 
 function setupEventListeners() {
+  layoutBtn.addEventListener('click', () => setComparisonMode(!comparisonMode));
+  copyComparisonBtn.addEventListener('click', copyComparison);
   // Help modal
   helpBtn.addEventListener('click', () => helpModalEl.classList.add('active'));
   closeHelpBtn.addEventListener('click', () => helpModalEl.classList.remove('active'));
@@ -431,6 +496,7 @@ function getCurrentViewport(): crop.ViewportInfo | undefined {
 
 // Refusing beats a crop mode whose rect-drawing handlers bail on a null viewport, leaving it inert (docs/crop-and-pptx.md: crop-needs-viewport).
 function tryEnterCropMode(): void {
+  if (comparisonMode) setComparisonMode(false);
   const vp = getCurrentViewport();
   if (!vp) {
     updateStatus('Crop unavailable: image not loaded', '', currentTupleIndex);
@@ -1275,7 +1341,7 @@ function loadTuple(index: TupleIndex) {
   updateCarouselSelection();
 
   // Cached renders on the next frame; otherwise preview + spinner.
-  if (images[currentModalityIndex]) {
+  if (comparisonMode || images[currentModalityIndex]) {
     scheduleRender();
   } else {
     showPreviewOrLoading(index, currentModalityIndex);
@@ -1313,6 +1379,7 @@ function loadTuple(index: TupleIndex) {
     loadDebounceTimer = window.setTimeout(() => {
       loadDebounceTimer = null;
       post(planFor().now);
+      if (comparisonMode) scheduleRender();
     }, LOAD_DEBOUNCE_MS);
   } else {
     post(planFor().now);
@@ -1371,7 +1438,7 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
     const previewImg = new Image();
     previewImg.onload = () => {
       // Deferred: only show if we're still on the same tuple/modality.
-      if (currentTupleIndex === tupleIndex && currentModalityIndex === displayModalityIndex) {
+      if (!comparisonMode && currentTupleIndex === tupleIndex && currentModalityIndex === displayModalityIndex) {
         canvasEl.classList.add('preview');
 
         const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
@@ -2119,6 +2186,7 @@ function runMenuAction(action: MenuActionId, target: MenuContext): void {
       if (hiddenModalities.has(original)) hiddenModalities.delete(original);
       else hiddenModalities.add(original);
       updateModalitySelector();
+      if (comparisonMode) render();
       break;
     }
     default:
@@ -2246,6 +2314,9 @@ function applyEmptyNotice(): boolean {
 }
 
 function render() {
+  layoutBtn.textContent = comparisonMode ? 'Single view' : 'Compare all';
+  layoutBtn.setAttribute('aria-pressed', String(comparisonMode));
+  document.getElementById('fp-minimap')!.style.display = comparisonMode ? 'none' : '';
   // Nothing to draw: a notice, never a spinner over the last frame (docs/loading-architecture.md: empty-comparison-is-terminal).
   if (applyEmptyNotice()) return;
   // Re-derive from the cache; module-level `images` holds a previous tuple's frames (docs/loading-architecture.md: render-from-loaded-tuples).
@@ -2262,6 +2333,10 @@ function render() {
     updateCarouselSelection(false);
   }
 
+  if (comparisonMode) {
+    renderComparison();
+    return;
+  }
   const isMissing = currentImage && (currentImage as any).missing;
 
   if (!currentImage || isMissing) {
@@ -2510,6 +2585,7 @@ function handleKeyUp(e: KeyboardEvent) {
 }
 
 function handleWheel(e: WheelEvent) {
+  if ((e.target as HTMLElement).closest('#floating-panel, #comparison-toolbar')) return;
   const carouselRect = carouselEl.getBoundingClientRect();
   if (isMultiTupleMode &&
       e.clientX >= carouselRect.left && e.clientX <= carouselRect.right &&
@@ -2523,8 +2599,15 @@ function handleWheel(e: WheelEvent) {
 
   const rect = viewerEl.getBoundingClientRect();
   const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
-  const mouseX = e.clientX - rect.left - carouselOffset - (rect.width - carouselOffset) / 2;
-  const mouseY = e.clientY - rect.top - rect.height / 2;
+  let mouseX = e.clientX - rect.left - carouselOffset - (rect.width - carouselOffset) / 2;
+  let mouseY = e.clientY - rect.top - rect.height / 2;
+  if (comparisonMode) {
+    const x = e.clientX - rect.left - carouselOffset, y = e.clientY - rect.top;
+    const cell = comparisonGeometry().cells.find(c => x >= c.x && x < c.x + c.width && y >= c.y && y < c.y + c.height);
+    if (!cell || y >= cell.y + cell.height - CAPTION_HEIGHT) return;
+    mouseX = x - cell.x - cell.width / 2;
+    mouseY = y - cell.y - (cell.height - CAPTION_HEIGHT) / 2;
+  }
 
   const zoomRatio = newZoom / zoom;
   panX = mouseX - (mouseX - panX) * zoomRatio;
@@ -2539,6 +2622,18 @@ function handleMouseDown(e: MouseEvent) {
   if (e.button !== 0) return;
   if ((e.target as HTMLElement).closest('#carousel')) return;
   if ((e.target as HTMLElement).closest('#floating-panel')) return;
+  if ((e.target as HTMLElement).closest('#comparison-toolbar, #carousel-resize')) return;
+  if (comparisonMode) {
+    const rect = viewerEl.getBoundingClientRect();
+    const { offset, cells } = comparisonGeometry();
+    const x = e.clientX - rect.left - offset, y = e.clientY - rect.top;
+    const cell = cells.find(c => x >= c.x && x < c.x + c.width && y >= c.y && y < c.y + c.height);
+    if (!cell) return;
+    currentModalityIndex = asDisplay(cell.index);
+    centreOnCurrentModality();
+    columnReport.keyed(currentModalityIndex);
+    render();
+  }
 
   // Crop mode intercepts mouse events
   if (crop.cropMode && crop.handleCropMouseDown(e)) return;
@@ -2565,6 +2660,7 @@ function handleMouseUp(e: MouseEvent) {
 
 // Image copy must happen webview-side: vscode.env.clipboard is text-only, and the native webview menu cannot serialize a data-URL <img>.
 function copyCurrentImage(): void {
+  if (comparisonMode) { copyComparison(); return; }
   const currentImage = images[currentModalityIndex];
   if (!currentImage || (currentImage as any).missing) {
     showCopyToast('No image to copy');

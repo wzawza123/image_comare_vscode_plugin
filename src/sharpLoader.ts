@@ -1,6 +1,19 @@
 /** Dynamic Sharp loader with WASM fallback; null when neither loads. See docs/image-backends.md. */
 
 /* eslint-disable @typescript-eslint/no-var-requires */
+import { createRequire } from 'node:module';
+
+// A failed webpack external can remain cached as {}. Retrying that wrapper would
+// falsely report success, and require.cache there is webpack's cache, not Node's.
+const runtimeRequire = createRequire(__filename);
+
+function requireSharp(): SharpType {
+  const candidate: unknown = runtimeRequire('sharp');
+  if (typeof candidate !== 'function') {
+    throw new Error('Could not load the "sharp" module: export is not callable');
+  }
+  return candidate as SharpType;
+}
 
 export type SharpType = typeof import('sharp');
 
@@ -29,7 +42,7 @@ function loadSharp(): void {
 
   // --- Attempt 1: normal load -------------------------------------------------
   try {
-    sharpModule = require('sharp');
+    sharpModule = requireSharp();
     return;
   } catch (e: any) {
     const msg: string = e?.message ?? '';
@@ -53,13 +66,13 @@ function loadSharp(): void {
   // --- Attempt 2: force WASM by blocking native @img/sharp-* resolution ------
   try {
     // Purge the require cache so the retry re-runs Sharp's platform detection instead of returning the failed module.
-    for (const key of Object.keys(require.cache)) {
+    for (const key of Object.keys(runtimeRequire.cache)) {
       if (/[/\\](sharp|@img)[/\\]/.test(key)) {
-        delete require.cache[key];
+        delete runtimeRequire.cache[key];
       }
     }
 
-    const Module = require('module');
+    const Module = runtimeRequire('module');
     const origResolve: Function = Module._resolveFilename;
 
     // Make native @img/sharp-* look absent, which is the only case Sharp's own fallback chain handles.
@@ -78,7 +91,7 @@ function loadSharp(): void {
     };
 
     try {
-      sharpModule = require('sharp');
+      sharpModule = requireSharp();
     } finally {
       // Restore on every path: this is a process-global mutation (docs/image-backends.md: resolver-always-restored).
       Module._resolveFilename = origResolve;

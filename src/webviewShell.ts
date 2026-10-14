@@ -5,6 +5,9 @@
  */
 
 export const WEBVIEW_STYLES = `* { margin: 0; padding: 0; box-sizing: border-box; }
+#comparison-toolbar { display: flex; gap: 8px; padding: 6px 12px; background: var(--vscode-sideBar-background, #2a2a2a); }
+#comparison-toolbar button { padding: 5px 10px; border: 1px solid var(--vscode-panel-border, #555); border-radius: 4px; background: var(--vscode-button-secondaryBackground, #444); color: var(--vscode-button-secondaryForeground, #fff); cursor: pointer; }
+#comparison-toolbar button[aria-pressed="true"] { background: var(--vscode-button-background, #0078d4); }
 body {
   background: var(--vscode-editor-background, #1a1a1a);
   color: var(--vscode-editor-foreground, #fff);
@@ -696,7 +699,11 @@ body {
 }
 #help-version:empty { display: none; }`;
 
-export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
+export const WEBVIEW_BODY = `  <div id="comparison-toolbar">
+    <button id="layout-btn" aria-pressed="false" title="Toggle single image / synchronized comparison">Compare all</button>
+    <button id="copy-comparison-btn" title="Copy visible comparison with captions as PNG (current zoom and pan)">Copy collage</button>
+  </div>
+  <div id="loading">Loading images...</div>
 
   <div id="viewer">
     <div id="carousel"></div>
@@ -763,7 +770,9 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
         <tr><td>Drag</td><td>Pan image</td></tr>
         <tr><td>Click</td><td>Film-strip tile: go to it; its corner circle: toggle winner</td></tr>
         <tr id="help-row-contextmenu"><td>Right-click</td><td>On the image or a pill: <span id="help-contextmenu-items"></span></td></tr>
-        <tr><td>Ctrl/Cmd+C</td><td>Copy current image (when no text is selected)</td></tr>
+        <tr><td>Compare all</td><td>2–3 images side by side; 4 images in a 2×2 grid. Scroll/drag any pane to zoom/pan all.</td></tr>
+        <tr><td>Copy collage</td><td>Copy visible panes with captions at the current zoom/pan.</td></tr>
+        <tr><td>Ctrl/Cmd+C</td><td>Copy current image, or captioned collage in comparison view (when no text is selected)</td></tr>
         <tr id="help-row-savesession"><td>Ctrl/Cmd+S</td><td>Save Session As \u2014 keep a copy of this comparison</td></tr>
         <tr><td>C</td><td>Toggle crop mode</td></tr>
         <tr><td>2\u00d7-click</td><td>On a crop edge handle, square the crop toward that edge (in crop mode)</td></tr>
